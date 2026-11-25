@@ -597,687 +597,380 @@ end)
 
 
 -- =========================================================
+-- ZONEMUSIC V3 - LECTEUR STYLE SPOTIFY (interface HTML)
+-- Interface uniquement : le moteur audio au-dessus est inchange.
+-- F3 : activer / desactiver la souris sur le lecteur.
 -- =========================================================
--- ZONEMUSIC V2 - MODERN CLUB PLAYER
--- Interface uniquement : moteur audio conserve
--- =========================================================
-
-surface.CreateFont("ZM2_Title", {
-    font = "Montserrat", size = 21, weight = 900, extended = true
-})
-surface.CreateFont("ZM2_Sub", {
-    font = "Montserrat", size = 12, weight = 700, extended = true
-})
-surface.CreateFont("ZM2_Text", {
-    font = "Montserrat", size = 15, weight = 700, extended = true
-})
-surface.CreateFont("ZM2_Button", {
-    font = "Montserrat", size = 11, weight = 900, extended = true
-})
-surface.CreateFont("ZM2_Big", {
-    font = "Arial", size = 28, weight = 900
-})
 
 local ZM_Player
-local ZM_PlayerExpanded = false
+local ZM_HTML
+local ZM_Expanded = false
 local ZM_CursorEnabled = false
 local ZM_F3WasDown = false
-local ZM_PlayerHeight = 92
-local ZM_PlayerAlpha = 0
+local ZM_Alpha = 0
 local ZM_HUDZoneID
-local ZM_Cover
-local ZM_LastCover = ""
-local ZM_QueuePanel
-local ZM_QueueSignature = ""
-local ZM_VolumeSlider
-local ZM_MuteButton
-local ZM_PreviousButton
-local ZM_PauseButton
-local ZM_SkipButton
-local ZM_MutedVolume = nil
+local ZM_NextPush = 0
+local ZM_Ready = false
+local ZM_MutedVolume
+local ZM_FFT = {}
 
-local PURPLE = Color(177, 95, 255)
-local WHITE = Color(255, 255, 255)
-local MUTED = Color(167, 151, 190)
+local MINI_W, MINI_H = 440, 96
+local FULL_W, FULL_H = 440, 640
 
-local function ZM2_Time(value)
-    value = math.max(0, math.floor(tonumber(value) or 0))
-    return string.format("%02d:%02d", math.floor(value / 60), value % 60)
+local function ZM_VoteCount(action)
+    local state = ZM_HUDZoneID and ZoneMusic.QueueState and ZoneMusic.QueueState[ZM_HUDZoneID]
+    local votes = state and state.votes and state.votes[action] or {}
+    local n = 0
+    for _ in pairs(votes) do n = n + 1 end
+    return n
 end
 
-local function ZM2_Track()
-    local track = active.id and ZoneMusic.Playing[active.id]
-    if not track then return nil end
-
-    local current = expectedTrackTime(track)
-    local duration = tonumber(track.duration) or 0
-
-    local channel = validChannel(active.indoor) and active.indoor
-        or (validChannel(active.outdoor) and active.outdoor or nil)
-
-    if channel then
-        local ok, result = pcall(channel.GetTime, channel)
-        if ok and tonumber(result) then current = result end
-
-        ok, result = pcall(channel.GetLength, channel)
-        if ok and tonumber(result) and result > 0 then
-            duration = result
-        end
-    end
-
-    return {
-        title = track.title or "Musique inconnue",
-        requester = track.requester or "Inconnu",
-        thumbnail = track.thumbnail or "",
-        paused = track.paused == true,
-        current = current,
-        duration = duration,
-        percent = duration > 0 and math.Clamp(current / duration, 0, 1) or 0,
-        volume = VOLUME_CVAR:GetFloat()
-    }
-end
-
-local function ZM2_Send(action)
+local function ZM_Send(action)
     local id = ZM_HUDZoneID or active.id
     if not id then return end
-
     net.Start("ZoneMusic_Action")
     net.WriteString(action)
     net.WriteString(tostring(id))
     net.SendToServer()
 end
 
-local function ZM2_VoteCount(action)
-    local state = ZM_HUDZoneID and ZoneMusic.QueueState[ZM_HUDZoneID]
-    local votes = state and state.votes and state.votes[action] or {}
-    local count = 0
-
-    for _ in pairs(votes) do
-        count = count + 1
-    end
-
-    return count
-end
-
-local function ZM2_ImageHTML(url, size)
-    if not string.match(url or "", "^https?://") then
-        return ""
-    end
-
-    url = string.Replace(url, "&", "&amp;")
-    url = string.Replace(url, '"', "&quot;")
-
-    return [[
-        <html><body style="margin:0;background:#160d25;overflow:hidden">
-        <img src="]] .. url .. [[" style="
-        width:]] .. size .. [[px;height:]] .. size .. [[px;
-        object-fit:cover;border-radius:12px">
-        </body></html>
-    ]]
-end
-
-local function ZM2_Triangle(points, color)
-    surface.SetDrawColor(color)
-    draw.NoTexture()
-    surface.DrawPoly(points)
-end
-
-local function ZM2_Button(parent, x, y, w, h, label, callback, accent)
-    local btn = vgui.Create("DButton", parent)
-    btn:SetPos(x, y)
-    btn:SetSize(w, h)
-    btn:SetText("")
-    btn:SetCursor("hand")
-    btn.ZM2Hover = 0
-
-    btn.Paint = function(self, pw, ph)
-        local hovered = self:IsHovered()
-        self.ZM2Hover = Lerp(FrameTime() * 12,
-            self.ZM2Hover or 0, hovered and 1 or 0)
-
-        local hover = self.ZM2Hover
-        local cx, cy = pw / 2, ph / 2
-        local radius = math.min(pw, ph) / 2 - 2
-        local color = accent or Color(190, 135, 255, 255)
-
-        -- Halo lumineux animé
-        draw.RoundedBox(100,
-            cx - radius - 3 * hover,
-            cy - radius - 3 * hover,
-            (radius + 3 * hover) * 2,
-            (radius + 3 * hover) * 2,
-            Color(color.r, color.g, color.b, 20 + hover * 65))
-
-        -- Fond circulaire
-        draw.RoundedBox(100,
-            cx - radius, cy - radius,
-            radius * 2, radius * 2,
-            Color(35 + hover * 30, 23 + hover * 18,
-                55 + hover * 35, 255))
-
-        -- Anneau
-        surface.SetDrawColor(color.r, color.g, color.b,
-            75 + hover * 150)
-        surface.DrawOutlinedRect(
-            cx - radius, cy - radius,
-            radius * 2, radius * 2, 1
-        )
-
-        local white = Color(245, 239, 255, 255)
-        local iconColor = Color(
-            Lerp(hover, color.r, 255),
-            Lerp(hover, color.g, 255),
-            Lerp(hover, color.b, 255), 255
-        )
-
-        local function triangle(a, b, c)
-            ZM2_Triangle({
-                {x = a[1], y = a[2]},
-                {x = b[1], y = b[2]},
-                {x = c[1], y = c[2]}
-            }, iconColor)
-        end
-
-        -- PREVIOUS
-        if label == "previous" then
-            surface.SetDrawColor(iconColor)
-            surface.DrawRect(cx - 12, cy - 9, 3, 18)
-
-            triangle({cx - 8, cy}, {cx + 1, cy - 9},
-                {cx + 1, cy + 9})
-            triangle({cx + 1, cy}, {cx + 10, cy - 9},
-                {cx + 10, cy + 9})
-
-        -- NEXT
-        elseif label == "next" then
-            surface.SetDrawColor(iconColor)
-            surface.DrawRect(cx + 9, cy - 9, 3, 18)
-
-            triangle({cx + 8, cy}, {cx - 1, cy - 9},
-                {cx - 1, cy + 9})
-            triangle({cx - 1, cy}, {cx - 10, cy - 9},
-                {cx - 10, cy + 9})
-
-        -- PAUSE / PLAY
-        elseif label == "pause" then
-            local track = active and active.id
-                and ZoneMusic.Playing
-                and ZoneMusic.Playing[active.id]
-
-            if track and track.paused then
-                triangle({cx - 6, cy - 11},
-                    {cx - 6, cy + 11}, {cx + 12, cy})
-            else
-                draw.RoundedBox(2, cx - 9, cy - 10, 6, 20, white)
-                draw.RoundedBox(2, cx + 3, cy - 10, 6, 20, white)
+local function ZM_Spectrum()
+    local channel = validChannel(active.indoor) and active.indoor
+        or (validChannel(active.outdoor) and active.outdoor or nil)
+    local bars = {}
+    if channel and isfunction(channel.FFT) then
+        local ok, count = pcall(channel.FFT, channel, ZM_FFT, FFT_256)
+        if ok and (tonumber(count) or 0) > 0 then
+            for i = 1, 24 do
+                local idx = math.floor(1 + (i - 1) ^ 1.6)
+                bars[i] = math.Clamp((ZM_FFT[idx] or 0) * 9, 0, 1)
             end
+            return bars
+        end
+    end
+    for i = 1, 24 do bars[i] = 0 end
+    return bars
+end
 
-        -- VOLUME / MUTE
-        elseif label == "volume" then
-            local muted = VOLUME_CVAR:GetFloat() <= 0
+local function ZM_State()
+    local ply = LocalPlayer()
+    local id = ZM_HUDZoneID
+    local zone = id and ZoneMusic.Zones[id]
+    local track = id and ZoneMusic.Playing[id]
+    local qs = id and ZoneMusic.QueueState and ZoneMusic.QueueState[id] or {}
 
-            surface.SetDrawColor(iconColor)
-            surface.DrawRect(cx - 12, cy - 5, 6, 10)
-
-            triangle({cx - 7, cy - 6},
-                {cx + 2, cy - 13}, {cx + 2, cy + 13})
-
-            if muted then
-                surface.DrawLine(cx + 7, cy - 6, cx + 15, cy + 6)
-                surface.DrawLine(cx + 15, cy - 6, cx + 7, cy + 6)
-            else
-                surface.DrawLine(cx + 7, cy - 5, cx + 11, cy)
-                surface.DrawLine(cx + 11, cy, cx + 7, cy + 5)
-                surface.DrawLine(cx + 11, cy - 9, cx + 16, cy)
-                surface.DrawLine(cx + 16, cy, cx + 11, cy + 9)
+    local current, duration = 0, 0
+    if track then
+        current = expectedTrackTime(track)
+        duration = tonumber(track.duration) or 0
+        if active.id == id then
+            local ch = validChannel(active.indoor) and active.indoor
+                or (validChannel(active.outdoor) and active.outdoor or nil)
+            if ch then
+                local ok, r = pcall(ch.GetTime, ch)
+                if ok and tonumber(r) then current = r end
+                ok, r = pcall(ch.GetLength, ch)
+                if ok and tonumber(r) and r > 0 then duration = r end
             end
         end
     end
 
-    btn.DoClick = callback
-    return btn
+    local queue = {}
+    for i, item in ipairs(qs.queue or {}) do
+        queue[i] = {
+            title = tostring(item.title or "Musique"),
+            requester = tostring(item.requester or "Inconnu"),
+            thumbnail = tostring(item.thumbnail or ""),
+            duration = tonumber(item.duration) or 0
+        }
+    end
+    local history = {}
+    for i, item in ipairs(qs.history or {}) do
+        history[i] = {title = tostring(item.title or ""), requester = tostring(item.requester or "")}
+    end
+
+    return {
+        zone = zone and zone.name or "",
+        expanded = ZM_Expanded,
+        cursor = ZM_CursorEnabled,
+        superadmin = IsValid(ply) and ply:IsSuperAdmin() or false,
+        track = track and {
+            title = tostring(track.title or "Musique"),
+            requester = tostring(track.requester or "Inconnu"),
+            thumbnail = tostring(track.thumbnail or ""),
+            paused = track.paused == true,
+            current = current,
+            duration = duration
+        } or false,
+        volume = math.floor(VOLUME_CVAR:GetFloat() * 100 + 0.5),
+        maxVolume = math.floor((cfg.MaxVolume or 20) * 100),
+        votes = {skip = ZM_VoteCount("skip"), previous = ZM_VoteCount("previous")},
+        queue = queue,
+        history = history,
+        spectrum = ZM_Spectrum()
+    }
 end
 
-local function ZM2_SetInput(panel, enabled)
-    if not IsValid(panel) then return end
+local ZM_PAGE = [==[
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;700;800;900&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;user-select:none}
+html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe UI',Arial,sans-serif;color:#fff}
+:root{--g:#1ed760;--g2:#1db954;--bg:#121212;--card:#181818;--mut:#b3b3b3;--line:rgba(255,255,255,.1)}
+#p{position:absolute;inset:0;margin:6px;border-radius:18px;overflow:hidden;background:var(--bg);
+ box-shadow:0 18px 40px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.06)}
+#bgart{position:absolute;inset:-40px;background-size:cover;background-position:center;filter:blur(40px) saturate(1.6);opacity:.55;transition:background-image .6s}
+#shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(18,18,18,.25) 0%,rgba(18,18,18,.85) 55%,#121212 100%)}
+#c{position:relative;height:100%;display:flex;flex-direction:column}
+/* mini */
+#mini{display:flex;align-items:center;gap:12px;padding:12px 14px;height:84px;flex:none}
+.art{background:#282828 center/cover no-repeat;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.5);flex:none;display:flex;align-items:center;justify-content:center;color:#535353;font-size:26px}
+#mart{width:60px;height:60px}
+.meta{flex:1;min-width:0}
+.tag{font-size:10px;font-weight:800;letter-spacing:1.6px;color:var(--g);text-transform:uppercase;display:flex;align-items:center;gap:6px}
+.tag .dot{width:6px;height:6px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:pl 1.4s infinite}
+@keyframes pl{50%{opacity:.3}}
+.t{font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.s{font-size:12px;color:var(--mut);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+#eq{display:flex;align-items:flex-end;gap:2px;height:28px;flex:none}
+#eq i{display:block;width:3px;border-radius:2px;background:var(--g);height:3px;transition:height .1s}
+.ib{width:34px;height:34px;border-radius:50%;border:none;background:rgba(255,255,255,.07);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:.15s}
+.ib:hover{background:rgba(255,255,255,.16);transform:scale(1.06)}
+.ib svg{width:16px;height:16px;fill:currentColor}
+#mbar{position:absolute;left:0;right:0;top:82px;height:2px;background:rgba(255,255,255,.08)}
+#mbar div{height:100%;background:var(--g);width:0}
+/* full */
+#full{flex:1;display:none;flex-direction:column;padding:6px 22px 16px;min-height:0}
+.expanded #full{display:flex}
+.expanded #mbar{display:none}
+#bigart{width:220px;height:220px;margin:6px auto 16px;border-radius:10px;font-size:64px;box-shadow:0 20px 50px rgba(0,0,0,.65)}
+#ft{font-size:21px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fs{font-size:13px;color:var(--mut);margin-top:4px}
+#prog{margin-top:14px}
+#track{position:relative;height:4px;border-radius:4px;background:rgba(255,255,255,.2)}
+#fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:#fff;width:0}
+#prog:hover #fill{background:var(--g)}
+#knob{position:absolute;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;opacity:0;transition:opacity .15s}
+#prog:hover #knob{opacity:1}
+#times{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:6px;font-weight:600}
+#ctl{display:flex;align-items:center;justify-content:center;gap:26px;margin-top:6px}
+.cb{position:relative;border:none;background:none;color:#b3b3b3;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s}
+.cb:hover{color:#fff;transform:scale(1.08)}
+.cb svg{width:22px;height:22px;fill:currentColor}
+.cb .v{position:absolute;top:-6px;right:-12px;font-size:9px;font-weight:800;background:var(--g);color:#000;border-radius:8px;padding:1px 5px;display:none}
+#play{width:54px;height:54px;border-radius:50%;background:#fff;color:#000}
+#play:hover{transform:scale(1.07);background:#fff;color:#000}
+#play svg{width:24px;height:24px}
+#play.dis{opacity:.35;pointer-events:none}
+#vol{display:flex;align-items:center;gap:10px;margin-top:14px}
+#vol input{flex:1;-webkit-appearance:none;height:4px;border-radius:4px;background:linear-gradient(90deg,var(--g) var(--p,30%),rgba(255,255,255,.2) var(--p,30%));outline:none}
+#vol input::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;cursor:pointer}
+#vv{font-size:11px;color:var(--mut);width:44px;text-align:right;font-weight:700}
+#qh{display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+#qh b{font-size:14px;font-weight:800}
+#qh span{font-size:11px;color:var(--mut);font-weight:600}
+#q{flex:1;overflow-y:auto;margin-top:8px;min-height:0}
+#q::-webkit-scrollbar{width:5px}#q::-webkit-scrollbar-thumb{background:#535353;border-radius:4px}
+.row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:6px}
+.row:hover{background:rgba(255,255,255,.08)}
+.row .n{width:16px;font-size:12px;color:var(--mut);text-align:right;font-weight:600}
+.row .art{width:40px;height:40px;border-radius:4px;font-size:16px}
+.row .meta .t{font-size:13px;margin:0}
+.row .d{font-size:11px;color:var(--mut)}
+.empty{color:var(--mut);font-size:12px;text-align:center;padding:16px}
+.hint{font-size:10px;color:#6a6a6a;text-align:center;margin-top:8px}
+.hint b{color:var(--mut)}
+</style></head><body>
+<div id="p"><div id="bgart"></div><div id="shade"></div><div id="c">
+ <div id="mini">
+  <div id="mart" class="art">&#9835;</div>
+  <div class="meta"><div class="tag"><span class="dot"></span><span id="zn">Zone Music</span></div>
+   <div class="t" id="mt">Aucune musique</div><div class="s" id="ms">Tape /music &lt;titre ou lien&gt;</div></div>
+  <div id="eq"></div>
+  <button class="ib" id="tog" onclick="zm.toggle()"><svg viewBox="0 0 24 24" id="togi"><path d="M7 10l5 5 5-5z"/></svg></button>
+ </div>
+ <div id="mbar"><div id="mfill"></div></div>
+ <div id="full">
+  <div id="bigart" class="art">&#9835;</div>
+  <div id="ft">Aucune musique</div><div id="fs">&nbsp;</div>
+  <div id="prog"><div id="track"><div id="fill"></div><div id="knob"></div></div>
+   <div id="times"><span id="tc">0:00</span><span id="td">--:--</span></div></div>
+  <div id="ctl">
+   <button class="cb" onclick="zm.action('previous')" title="Voter : precedent"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg><span class="v" id="vp"></span></button>
+   <button class="cb" id="play" onclick="zm.action(S.track&&S.track.paused?'resume':'pause')"><svg viewBox="0 0 24 24" id="pi"></svg></button>
+   <button class="cb" onclick="zm.action('skip')" title="Voter : passer"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg><span class="v" id="vs"></span></button>
+  </div>
+  <div id="vol">
+   <button class="ib" onclick="zm.mute()" style="width:28px;height:28px;background:none"><svg viewBox="0 0 24 24" id="vi"></svg></button>
+   <input type="range" id="vr" min="0" max="2000" step="5" oninput="volIn(this.value)">
+   <span id="vv">100%</span>
+  </div>
+  <div id="qh"><b>File d'attente</b><span id="qc">0 titre</span></div>
+  <div id="q"></div>
+  <div class="hint"><b>F3</b> pour activer la souris &middot; votes : precedent / passer</div>
+ </div>
+</div></div>
+<script>
+var S={},dragging=0,lastArt=null,lastQ=null;
+var IC={play:'<path d="M8 5v14l11-7z"/>',pause:'<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>',
+ von:'<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8v8a4.5 4.5 0 002.5-4zM14 3.2v2.1a7 7 0 010 13.4v2.1a9 9 0 000-17.6z"/>',
+ voff:'<path d="M16.5 12A4.5 4.5 0 0014 8v2.2l2.45 2.45c.03-.2.05-.42.05-.65zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12a9 9 0 00-7-8.77v2.06A7 7 0 0119 12zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a9 9 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>',
+ down:'<path d="M7 10l5 5 5-5z"/>',up:'<path d="M7 14l5-5 5 5z"/>'};
+var eq=document.getElementById('eq');for(var i=0;i<12;i++)eq.appendChild(document.createElement('i'));
+function $(i){return document.getElementById(i)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function fmt(v){v=Math.max(0,Math.floor(v||0));return Math.floor(v/60)+':'+('0'+v%60).slice(-2)}
+function img(el,url){if(/^https?:\/\//.test(url||'')){el.style.backgroundImage='url("'+url.replace(/"/g,'%22')+'")';el.innerHTML=''}else{el.style.backgroundImage='';el.innerHTML='&#9835;'}}
+function volIn(v){dragging=Date.now();paintVol(v);zm.volume(Number(v))}
+function paintVol(v){var r=$('vr');r.value=v;r.style.setProperty('--p',(v/r.max*100)+'%');$('vv').textContent=v+'%';$('vi').innerHTML=v>0?IC.von:IC.voff}
+function U(s){S=s;var t=s.track;
+ document.body.className=s.expanded?'expanded':'';
+ $('togi').innerHTML=s.expanded?IC.up:IC.down;
+ $('zn').textContent=s.zone||'Zone Music';
+ var art=t?t.thumbnail:'';
+ if(art!==lastArt){lastArt=art;img($('mart'),art);img($('bigart'),art);
+  $('bgart').style.backgroundImage=/^https?:/.test(art)?'url("'+art.replace(/"/g,'%22')+'")':'none'}
+ $('mt').textContent=t?t.title:'Aucune musique';$('ft').textContent=t?t.title:'Aucune musique en cours';
+ $('ms').textContent=t?(t.paused?'En pause \u00b7 ':'')+'Demand\u00e9e par '+t.requester:'Tape /music <titre ou lien>';
+ $('fs').textContent=t?'Demand\u00e9e par '+t.requester:'La zone attend sa premi\u00e8re musique';
+ var pct=t&&t.duration>0?Math.min(1,t.current/t.duration)*100:0;
+ $('fill').style.width=pct+'%';$('knob').style.left=pct+'%';$('mfill').style.width=pct+'%';
+ $('tc').textContent=fmt(t?t.current:0);$('td').textContent=t&&t.duration>0?fmt(t.duration):'--:--';
+ $('pi').innerHTML=t&&t.paused?IC.play:IC.pause;
+ $('play').className='cb'+(s.superadmin&&t?'':' dis');$('play').title=s.superadmin?'Pause / lecture':'R\u00e9serv\u00e9 aux SuperAdmins';
+ var vp=$('vp'),vs=$('vs');vp.textContent=s.votes.previous;vp.style.display=s.votes.previous>0?'block':'none';
+ vs.textContent=s.votes.skip;vs.style.display=s.votes.skip>0?'block':'none';
+ $('vr').max=s.maxVolume;if(Date.now()-dragging>800)paintVol(s.volume);
+ var bars=eq.children,sp=s.spectrum||[];for(var i=0;i<bars.length;i++){var v=(sp[i*2]||0)+(sp[i*2+1]||0);bars[i].style.height=(3+Math.min(1,v)*25)+'px'}
+ eq.style.opacity=t&&!t.paused?1:.3;
+ var qk=JSON.stringify(s.queue);if(qk!==lastQ){lastQ=qk;var h='';
+  $('qc').textContent=s.queue.length+(s.queue.length>1?' titres':' titre');
+  if(!s.queue.length)h='<div class="empty">Rien \u00e0 suivre. Ajoute un son avec /music</div>';
+  s.queue.forEach(function(q,i){var a=/^https?:/.test(q.thumbnail)?' style="background-image:url(&quot;'+esc(q.thumbnail)+'&quot;)">':'>&#9835;';
+   h+='<div class="row"><span class="n">'+(i+1)+'</span><div class="art"'+a+'</div><div class="meta"><div class="t">'+esc(q.title)+'</div><div class="s">'+esc(q.requester)+'</div></div><span class="d">'+(q.duration>0?fmt(q.duration):'')+'</span></div>'});
+  $('q').innerHTML=h}
+}
+</script></body></html>
+]==]
 
-    panel:SetMouseInputEnabled(enabled)
-
-    for _, child in ipairs(panel:GetChildren()) do
-        ZM2_SetInput(child, enabled)
-    end
+local function ZM_Push()
+    if not ZM_Ready or not IsValid(ZM_HTML) then return end
+    local json = util.TableToJSON(ZM_State()) or "{}"
+    ZM_HTML:RunJavascript("if(window.U)U(" .. json .. ");")
 end
 
-local function ZM2_RebuildQueue()
-    if not IsValid(ZM_QueuePanel) then return end
-
-    local state = ZM_HUDZoneID and ZoneMusic.QueueState[ZM_HUDZoneID]
-    local queue = state and state.queue or {}
-
-    local signature = tostring(#queue)
-
-    for _, item in ipairs(queue) do
-        signature = signature .. "|" ..
-            tostring(item.title) .. "|" ..
-            tostring(item.requester) .. "|" ..
-            tostring(item.duration) .. "|" ..
-            tostring(item.thumbnail)
-    end
-
-    if signature == ZM_QueueSignature then return end
-    ZM_QueueSignature = signature
-
-    ZM_QueuePanel:Clear()
-
-    if #queue == 0 then
-        local empty = vgui.Create("DPanel", ZM_QueuePanel)
-        empty:Dock(TOP)
-        empty:SetTall(48)
-        empty.Paint = function(self, w, h)
-            draw.SimpleText("La file d'attente est vide",
-                "ZM2_Sub", w / 2, h / 2, MUTED,
-                TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
-        end
-        return
-    end
-
-    for i, item in ipairs(queue) do
-        local row = vgui.Create("DPanel", ZM_QueuePanel)
-        row:Dock(TOP)
-        row:DockMargin(0, 0, 0, 5)
-        row:SetTall(57)
-
-        row.Paint = function(self, w, h)
-            draw.RoundedBox(9, 0, 0, w, h,
-                Color(35, 24, 51))
-
-            draw.SimpleText(string.format("%02d", i),
-                "ZM2_Sub", 10, h / 2, PURPLE,
-                TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-            draw.SimpleText(tostring(item.title or "Musique"),
-                "ZM2_Text", 54, 17, WHITE,
-                TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-            draw.SimpleText("Par " .. tostring(item.requester or "Inconnu"),
-                "ZM2_Sub", 54, 39, MUTED,
-                TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-            draw.SimpleText(ZM2_Time(item.duration),
-                "ZM2_Sub", w - 12, h / 2, MUTED,
-                TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
-        end
-
-        local thumb = vgui.Create("DHTML", row)
-        thumb:SetPos(29, 5)
-        thumb:SetSize(46, 47)
-        thumb:SetMouseInputEnabled(false)
-        thumb:SetKeyboardInputEnabled(false)
-
-        if item.thumbnail and item.thumbnail ~= "" then
-            thumb:SetHTML(ZM2_ImageHTML(item.thumbnail, 46))
-        else
-            thumb:SetVisible(false)
-        end
+local function ZM_SetInput(enabled)
+    if not IsValid(ZM_Player) then return end
+    ZM_Player:SetMouseInputEnabled(enabled)
+    if IsValid(ZM_HTML) then
+        ZM_HTML:SetMouseInputEnabled(enabled)
+        ZM_HTML:SetKeyboardInputEnabled(false)
     end
 end
 
 local function ZM_CreatePlayer()
     if IsValid(ZM_Player) then ZM_Player:Remove() end
-
-    ZM_PlayerExpanded = false
-    ZM_CursorEnabled = false
+    ZM_Expanded, ZM_CursorEnabled, ZM_Ready = false, false, false
 
     ZM_Player = vgui.Create("DPanel")
-    ZM_Player:SetSize(620, 92)
+    ZM_Player:SetSize(MINI_W, MINI_H)
+    ZM_Player:SetPaintBackground(false)
     ZM_Player:SetMouseInputEnabled(false)
     ZM_Player:SetKeyboardInputEnabled(false)
-    ZM_Player:SetPaintBackground(false)
+    ZM_Player:ParentToHUD()
 
-    ZM_Player.Paint = function(self, w, h)
-        local alpha = self:GetAlpha()
-        local t = RealTime()
-        local pulse = 0.5 + math.sin(t * 3) * 0.5
-        local info = ZM2_Track()
+    ZM_HTML = vgui.Create("DHTML", ZM_Player)
+    ZM_HTML:Dock(FILL)
+    ZM_HTML:SetAllowLua(false)
+    ZM_HTML:SetMouseInputEnabled(false)
+    ZM_HTML:SetKeyboardInputEnabled(false)
 
-        local function C(r, g, b, a)
-            return Color(r, g, b, math.floor(a * alpha))
+    ZM_HTML:AddFunction("zm", "toggle", function()
+        ZM_Expanded = not ZM_Expanded
+        ZM_NextPush = 0
+    end)
+    ZM_HTML:AddFunction("zm", "action", function(action)
+        action = tostring(action or "")
+        if action == "skip" or action == "previous" or action == "pause" or action == "resume" then
+            ZM_Send(action)
         end
-
-        draw.RoundedBox(24, 2, 5, w - 4, h - 5,
-            C(0, 0, 0, 180))
-
-        draw.RoundedBox(23, 0, 0, w, h,
-            C(15, 10, 29, 250))
-
-        draw.RoundedBox(22, 2, 2, w - 4, h - 4,
-            C(35, 19, 54, 250))
-
-        draw.RoundedBox(2, 35, 3, w - 70, 2,
-            C(190, 100, 255, 160 + pulse * 80))
-
-        -- Logo
-        draw.RoundedBox(17, 14, 13, 66, 66,
-            C(91, 43, 143, 255))
-
-        draw.SimpleText("♫", "ZM2_Big",
-            47, 46, C(255, 235, 255, 255),
-            TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
-
-        draw.SimpleText("ZONE MUSIC",
-            "ZM2_Sub", 94, 20,
-            C(195, 150, 255, 255),
-            TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-        draw.SimpleText(
-            info and info.title or "Aucune musique en cours",
-            "ZM2_Title", 94, 44,
-            C(255, 255, 255, 255),
-            TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER
-        )
-
-        draw.SimpleText(
-            info and ("Demandée par " .. info.requester) or "En attente d'une musique",
-            "ZM2_Sub", 95, 68,
-            C(170, 155, 195, 255),
-            TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER
-        )
-
-        -- Equaliseur
-        for i = 1, 8 do
-            local wave = math.abs(math.sin(t * 5 + i * 0.8))
-            local bh = 6 + wave * 23
-
-            draw.RoundedBox(3,
-                w - 110 + i * 9, 74 - bh,
-                5, bh,
-                C(150 + i * 10, 90 + wave * 100, 255, 240))
-        end
-
-        if not ZM_PlayerExpanded then return end
-
-        draw.RoundedBox(1, 18, 98, w - 36, 1,
-            C(125, 90, 160, 130))
-
-        -- Now playing
-        draw.SimpleText("NOW PLAYING",
-            "ZM2_Sub", 125, 119,
-            C(190, 135, 255, 255),
-            TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-        if info then
-            draw.SimpleText(
-                info.paused and "EN PAUSE" or "EN LECTURE",
-                "ZM2_Sub", w - 25, 119,
-                info.paused and Color(255, 190, 90) or Color(90, 255, 180),
-                TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER
-            )
-
-            draw.SimpleText(ZM2_Time(info.current),
-                "ZM2_Sub", 125, 176, C(200, 185, 220, 255),
-                TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-            draw.SimpleText(ZM2_Time(info.duration),
-                "ZM2_Sub", w - 25, 176, C(200, 185, 220, 255),
-                TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
-
-            draw.RoundedBox(5, 125, 190, w - 150, 6,
-                C(70, 55, 85, 255))
-
-            draw.RoundedBox(5, 125, 190,
-                math.max(0, (w - 150) * info.percent), 6,
-                C(190, 100, 255, 255))
+    end)
+    ZM_HTML:AddFunction("zm", "volume", function(value)
+        value = math.Clamp((tonumber(value) or 100) / 100, 0, cfg.MaxVolume or 20)
+        RunConsoleCommand("zonemusic_volume", tostring(value))
+    end)
+    ZM_HTML:AddFunction("zm", "mute", function()
+        if VOLUME_CVAR:GetFloat() > 0 then
+            ZM_MutedVolume = VOLUME_CVAR:GetFloat()
+            RunConsoleCommand("zonemusic_volume", "0")
         else
-            draw.SimpleText("Aucun morceau en cours",
-                "ZM2_Text", 125, 155, MUTED,
-                TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
+            RunConsoleCommand("zonemusic_volume", tostring(ZM_MutedVolume or 1))
         end
+        ZM_NextPush = 0
+    end)
 
-        draw.SimpleText("FILE D'ATTENTE",
-            "ZM2_Sub", 23, 330, C(190, 135, 255, 255),
-            TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-        local state = ZM_HUDZoneID and ZoneMusic.QueueState[ZM_HUDZoneID]
-        local queue = state and state.queue or {}
-
-        draw.SimpleText(#queue .. " TITRE(S)",
-            "ZM2_Sub", w - 23, 330, MUTED,
-            TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER)
-
-        draw.SimpleText("VOLUME",
-            "ZM2_Sub", 23, 285, C(190, 135, 255, 255),
-            TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
-
-        draw.SimpleText(
-            math.floor(VOLUME_CVAR:GetFloat() * 100) .. "%",
-            "ZM2_Sub", w - 25, 285, WHITE,
-            TEXT_ALIGN_RIGHT, TEXT_ALIGN_CENTER
-        )
+    ZM_HTML.OnDocumentReady = function()
+        ZM_Ready = true
+        ZM_NextPush = 0
     end
-
-    -- Pochette principale
-    ZM_Cover = vgui.Create("DHTML", ZM_Player)
-    ZM_Cover:SetPos(25, 113)
-    ZM_Cover:SetSize(82, 82)
-    ZM_Cover:SetMouseInputEnabled(false)
-    ZM_Cover:SetKeyboardInputEnabled(false)
-
-    -- Boutons DJ
-    ZM_PreviousButton = ZM2_Button(
-        ZM_Player, 174, 218, 48, 48, "previous",
-        function() ZM2_Send("previous") end
-    )
-
-    ZM_PauseButton = ZM2_Button(
-        ZM_Player, 241, 214, 54, 54, "pause",
-        function()
-            local track = active.id and ZoneMusic.Playing[active.id]
-            ZM2_Send(track and track.paused and "resume" or "pause")
-        end
-    )
-
-    ZM_SkipButton = ZM2_Button(
-        ZM_Player, 313, 218, 48, 48, "next",
-        function() ZM2_Send("skip") end
-    )
-
-    -- Volume
-    ZM_VolumeSlider = vgui.Create("DNumSlider", ZM_Player)
-    ZM_VolumeSlider:SetPos(100, 293)
-    ZM_VolumeSlider:SetSize(390, 28)
-    ZM_VolumeSlider:SetText("")
-    ZM_VolumeSlider:SetMinMax(0, (cfg.MaxVolume or 20) * 100)
-    ZM_VolumeSlider:SetDecimals(0)
-    ZM_VolumeSlider:SetValue(VOLUME_CVAR:GetFloat() * 100)
-    ZM_VolumeSlider:SetDark(true)
-    ZM_VolumeSlider.OnValueChanged = function(self, value)
-        RunConsoleCommand("zonemusic_volume",
-            tostring(math.Clamp(value / 100, 0, cfg.MaxVolume or 20)))
-    end
-
-    ZM_MuteButton = ZM2_Button(
-        ZM_Player, 520, 287, 38, 38, "volume",
-        function()
-            if VOLUME_CVAR:GetFloat() > 0 then
-                ZM_MutedVolume = VOLUME_CVAR:GetFloat()
-                RunConsoleCommand("zonemusic_volume", "0")
-            else
-                RunConsoleCommand("zonemusic_volume",
-                    tostring(ZM_MutedVolume or 1))
-            end
-        end
-    )
-
-    -- File d'attente
-    ZM_QueuePanel = vgui.Create("DScrollPanel", ZM_Player)
-    ZM_QueuePanel:SetPos(20, 345)
-    ZM_QueuePanel:SetSize(580, 125)
-
-    local bar = ZM_QueuePanel:GetVBar()
-    bar:SetWide(5)
-    bar.Paint = function() end
-    bar.btnUp.Paint = function() end
-    bar.btnDown.Paint = function() end
-    bar.btnGrip.Paint = function(self, w, h)
-        draw.RoundedBox(4, 0, 0, w, h, PURPLE)
-    end
-
-    -- Fleche
-    local arrow = vgui.Create("DButton", ZM_Player)
-    ZM_PlayerArrow = arrow
-    arrow:SetPos(568, 17)
-    arrow:SetSize(34, 45)
-    arrow:SetText("")
-    arrow:SetTooltip("Ouvrir / Fermer le lecteur")
-
-    arrow.Paint = function(self, w, h)
-        draw.RoundedBox(12, 0, 0, w, h,
-            self:IsHovered() and Color(110, 60, 160) or Color(50, 32, 72))
-
-        draw.SimpleText(ZM_PlayerExpanded and "⌃" or "⌄",
-            "ZM2_Big", w / 2, h / 2,
-            WHITE, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
-    end
-
-    arrow.DoClick = function()
-        ZM_PlayerExpanded = not ZM_PlayerExpanded
-
-        if ZM_PlayerExpanded then
-            ZM_VolumeSlider:SetValue(VOLUME_CVAR:GetFloat() * 100)
-            ZM2_RebuildQueue()
-        end
-    end
+    ZM_HTML:SetHTML(ZM_PAGE)
 
     ZM_Player.Think = function(self)
         local ply = LocalPlayer()
         local pos = IsValid(ply) and ply:GetPos() or nil
 
         ZM_HUDZoneID = nil
-
         if pos then
             for id, zone in pairs(ZoneMusic.Zones or {}) do
-                if zone.min and zone.max and pos:WithinAABox(zone.min, zone.max) then
-                    ZM_HUDZoneID = id
-                    break
-                end
+                if ZoneMusic.IsInZone(pos, zone) then ZM_HUDZoneID = id break end
             end
         end
 
-        local zone = ZM_HUDZoneID and ZoneMusic.Zones[ZM_HUDZoneID]
-        local visible = IsValid(ply) and zone ~= nil
+        local visible = ZM_HUDZoneID ~= nil
+        ZM_Alpha = Lerp(math.Clamp(FrameTime() * 8, 0, 1), ZM_Alpha, visible and 255 or 0)
+        self:SetAlpha(ZM_Alpha)
+        self:SetVisible(ZM_Alpha > 2)
 
-        ZM_PlayerAlpha = Lerp(
-            math.Clamp(FrameTime() * 8, 0, 1),
-            ZM_PlayerAlpha,
-            visible and 255 or 0
-        )
-
-        ZM_PlayerHeight = Lerp(
-            math.Clamp(FrameTime() * 10, 0, 1),
-            ZM_PlayerHeight,
-            ZM_PlayerExpanded and 490 or 92
-        )
-
-        local width = math.min(620, ScrW() - 24)
-
-        self:SetSize(width, ZM_PlayerHeight)
-        self:SetPos((ScrW() - width) / 2, 24 + math.sin(RealTime() * 2) * 2)
-        self:SetAlpha(ZM_PlayerAlpha)
-        self:SetVisible(true)
+        local w = math.min(ZM_Expanded and FULL_W or MINI_W, ScrW() - 20)
+        local targetH = math.min(ZM_Expanded and FULL_H or MINI_H, ScrH() - 40)
+        local h = Lerp(math.Clamp(FrameTime() * 12, 0, 1), self:GetTall(), targetH)
+        if math.abs(h - targetH) < 1 then h = targetH end
+        self:SetSize(w, math.floor(h))
+        self:SetPos(ScrW() - w - 16, 16)
 
         local f3 = input.IsKeyDown(KEY_F3)
-
-        if f3 and not ZM_F3WasDown and visible then
+        if f3 and not ZM_F3WasDown and visible and not vgui.GetKeyboardFocus() then
             ZM_CursorEnabled = not ZM_CursorEnabled
+            ZM_NextPush = 0
         end
-
         ZM_F3WasDown = f3
 
         if not visible then
             ZM_CursorEnabled = false
-            ZM_PlayerExpanded = false
+            ZM_Expanded = false
         end
 
-        local cursor = ZM_CursorEnabled and visible
-        ZM2_SetInput(self, cursor)
-        gui.EnableScreenClicker(cursor)
+        ZM_SetInput(ZM_CursorEnabled)
+        gui.EnableScreenClicker(ZM_CursorEnabled)
 
-        local info = ZM2_Track()
-
-        if IsValid(ZM_Cover) then
-            local url = info and info.thumbnail or ""
-
-            if url ~= ZM_LastCover then
-                ZM_LastCover = url
-
-                if string.match(url, "^https?://") then
-                    ZM_Cover:SetHTML(ZM2_ImageHTML(url, 82))
-                else
-                    ZM_Cover:SetHTML([[
-                        <html><body style="margin:0;background:#26153a;
-                        color:white;text-align:center;padding-top:20px">
-                        <span style="font-size:30px">♫</span></body></html>
-                    ]])
-                end
-            end
-
-            ZM_Cover:SetVisible(ZM_PlayerExpanded)
-        end
-
-        if IsValid(ZM_PauseButton) then
-            ZM_PauseButton:SetVisible(IsValid(ply) and ply:IsSuperAdmin())
-        end
-
-        if IsValid(ZM_PreviousButton) then
-            ZM_PreviousButton:SetText("")
-            ZM_PreviousButton:SetTooltip(
-                "Voter pour le morceau précédent : " ..
-                ZM2_VoteCount("previous") .. " vote(s)"
-            )
-        end
-
-        if IsValid(ZM_SkipButton) then
-            ZM_SkipButton:SetTooltip(
-                "Voter pour passer : " ..
-                ZM2_VoteCount("skip") .. " vote(s)"
-            )
-        end
-
-        if ZM_PlayerExpanded then
-            ZM2_RebuildQueue()
-        end
-
-        if IsValid(ZM_VolumeSlider) then
-            ZM_VolumeSlider:SetVisible(ZM_PlayerExpanded)
-        end
-
-        if IsValid(ZM_MuteButton) then
-            ZM_MuteButton:SetVisible(ZM_PlayerExpanded)
-        end
-
-        if IsValid(ZM_QueuePanel) then
-            ZM_QueuePanel:SetVisible(ZM_PlayerExpanded)
+        if visible and RealTime() >= ZM_NextPush then
+            ZM_NextPush = RealTime() + 0.1
+            ZM_Push()
         end
     end
 end
 
 timer.Remove("ZoneMusic_CreatePlayer")
-
 timer.Create("ZoneMusic_CreatePlayer", 1, 0, function()
     if not IsValid(LocalPlayer()) then return end
-
-    if IsValid(ZM_Player) then
-        timer.Remove("ZoneMusic_CreatePlayer")
-        return
-    end
-
+    if IsValid(ZM_Player) then timer.Remove("ZoneMusic_CreatePlayer") return end
     local ok, err = pcall(ZM_CreatePlayer)
-
     if ok and IsValid(ZM_Player) then
         timer.Remove("ZoneMusic_CreatePlayer")
-        print("[ZoneMusic V2] Lecteur initialise.")
+        print("[ZoneMusic] Lecteur initialise.")
     elseif not ok then
-        print("[ZoneMusic V2] Erreur : " .. tostring(err))
+        print("[ZoneMusic] Erreur lecteur : " .. tostring(err))
     end
 end)
 
@@ -1287,4 +980,4 @@ hook.Add("ShutDown", "ZoneMusic_PlayerCleanup", function()
     if IsValid(ZM_Player) then ZM_Player:Remove() end
 end)
 
-print("[ZoneMusic V2] Interface moderne chargee.")
+print("[ZoneMusic] Interface style Spotify chargee.")
