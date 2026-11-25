@@ -1,0 +1,13 @@
+-- ZoneMusic loader : charge la configuration partagee et les fichiers du module.
+if SERVER then
+    AddCSLuaFile("zonemusic/sh_config.lua")
+    AddCSLuaFile("zonemusic/cl_zonemusic.lua")
+end
+
+include("zonemusic/sh_config.lua")
+
+if SERVER then
+    include("zonemusic/sv_zonemusic.lua")
+else
+    include("zonemusic/cl_zonemusic.lua")
+end
