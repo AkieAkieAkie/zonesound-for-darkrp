@@ -808,7 +808,7 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
   </div>
   <div id="qh"><b>File d'attente</b><span id="qc">0 titre</span></div>
   <div id="q"></div>
-  <div class="hint"><b>F3</b> pour activer la souris &middot; votes : precedent / passer</div>
+  <div class="hint"><b>F3</b> pour activer / couper la souris &middot; votes : precedent / passer</div>
  </div>
 </div></div>
 <script>
@@ -860,31 +860,60 @@ local function ZM_Push()
     ZM_HTML:RunJavascript("if(window.U)U(" .. json .. ");")
 end
 
+local ZM_InputState = nil
+local ZM_ClickerOwned = false
+
+-- Applique l'etat souris uniquement quand il change (evite de casser F4 / autres menus).
 local function ZM_SetInput(enabled)
-    if not IsValid(ZM_Player) then return end
-    ZM_Player:SetMouseInputEnabled(enabled)
+    enabled = enabled == true
+    if ZM_InputState == enabled then return end
+    ZM_InputState = enabled
+
+    if IsValid(ZM_Player) then
+        ZM_Player:SetMouseInputEnabled(enabled)
+        ZM_Player:SetKeyboardInputEnabled(false)
+    end
     if IsValid(ZM_HTML) then
         ZM_HTML:SetMouseInputEnabled(enabled)
         ZM_HTML:SetKeyboardInputEnabled(false)
     end
+
+    if enabled then
+        gui.EnableScreenClicker(true)
+        ZM_ClickerOwned = true
+        if IsValid(ZM_Player) then ZM_Player:MoveToFront() end
+    elseif ZM_ClickerOwned then
+        gui.EnableScreenClicker(false)
+        ZM_ClickerOwned = false
+    end
+    ZM_NextPush = 0
+end
+
+local function ZM_ToggleCursor()
+    if not ZM_HUDZoneID or not IsValid(ZM_Player) then
+        ZM_CursorEnabled = false
+        ZM_SetInput(false)
+        return
+    end
+    ZM_CursorEnabled = not ZM_CursorEnabled
+    ZM_SetInput(ZM_CursorEnabled)
 end
 
 local function ZM_CreatePlayer()
     if IsValid(ZM_Player) then ZM_Player:Remove() end
-    ZM_Expanded, ZM_CursorEnabled, ZM_Ready = false, false, false
+    ZM_Expanded, ZM_CursorEnabled, ZM_Ready, ZM_InputState = false, false, false, nil
 
+    -- Panneau racine (PAS ParentToHUD : un panneau du HUD ne recoit jamais les clics).
     ZM_Player = vgui.Create("DPanel")
     ZM_Player:SetSize(MINI_W, MINI_H)
+    ZM_Player:SetPos(ScrW() - MINI_W - 16, 16)
     ZM_Player:SetPaintBackground(false)
-    ZM_Player:SetMouseInputEnabled(false)
-    ZM_Player:SetKeyboardInputEnabled(false)
-    ZM_Player:ParentToHUD()
+    ZM_Player:SetAlpha(0)
+    ZM_Player:SetVisible(false)
 
     ZM_HTML = vgui.Create("DHTML", ZM_Player)
     ZM_HTML:Dock(FILL)
     ZM_HTML:SetAllowLua(false)
-    ZM_HTML:SetMouseInputEnabled(false)
-    ZM_HTML:SetKeyboardInputEnabled(false)
 
     ZM_HTML:AddFunction("zm", "toggle", function()
         ZM_Expanded = not ZM_Expanded
@@ -905,7 +934,7 @@ local function ZM_CreatePlayer()
             ZM_MutedVolume = VOLUME_CVAR:GetFloat()
             RunConsoleCommand("zonemusic_volume", "0")
         else
-            RunConsoleCommand("zonemusic_volume", tostring(ZM_MutedVolume or 1))
+            RunConsoleCommand("zonemusic_volume", tostring(ZM_MutedVolume or cfg.DefaultVolume or 1))
         end
         ZM_NextPush = 0
     end)
@@ -915,51 +944,82 @@ local function ZM_CreatePlayer()
         ZM_NextPush = 0
     end
     ZM_HTML:SetHTML(ZM_PAGE)
+    ZM_SetInput(false)
+end
 
-    ZM_Player.Think = function(self)
-        local ply = LocalPlayer()
-        local pos = IsValid(ply) and ply:GetPos() or nil
+-- Logique dans un hook global : le Think d'un panneau cache ne s'execute plus,
+-- ce qui empechait le lecteur de reapparaitre et F3 de fonctionner.
+hook.Remove("Think", "ZoneMusic_PlayerThink")
+hook.Add("Think", "ZoneMusic_PlayerThink", function()
+    if not IsValid(ZM_Player) then return end
+    local ply = LocalPlayer()
+    if not IsValid(ply) then return end
 
-        ZM_HUDZoneID = nil
-        if pos then
-            for id, zone in pairs(ZoneMusic.Zones or {}) do
-                if ZoneMusic.IsInZone(pos, zone) then ZM_HUDZoneID = id break end
-            end
-        end
-
-        local visible = ZM_HUDZoneID ~= nil
-        ZM_Alpha = Lerp(math.Clamp(FrameTime() * 8, 0, 1), ZM_Alpha, visible and 255 or 0)
-        self:SetAlpha(ZM_Alpha)
-        self:SetVisible(ZM_Alpha > 2)
-
-        local w = math.min(ZM_Expanded and FULL_W or MINI_W, ScrW() - 20)
-        local targetH = math.min(ZM_Expanded and FULL_H or MINI_H, ScrH() - 40)
-        local h = Lerp(math.Clamp(FrameTime() * 12, 0, 1), self:GetTall(), targetH)
-        if math.abs(h - targetH) < 1 then h = targetH end
-        self:SetSize(w, math.floor(h))
-        self:SetPos(ScrW() - w - 16, 16)
-
-        local f3 = input.IsKeyDown(KEY_F3)
-        if f3 and not ZM_F3WasDown and visible and not vgui.GetKeyboardFocus() then
-            ZM_CursorEnabled = not ZM_CursorEnabled
-            ZM_NextPush = 0
-        end
-        ZM_F3WasDown = f3
-
-        if not visible then
-            ZM_CursorEnabled = false
-            ZM_Expanded = false
-        end
-
-        ZM_SetInput(ZM_CursorEnabled)
-        gui.EnableScreenClicker(ZM_CursorEnabled)
-
-        if visible and RealTime() >= ZM_NextPush then
-            ZM_NextPush = RealTime() + 0.1
-            ZM_Push()
+    -- Zone actuelle (petite marge de sortie pour eviter le clignotement en bordure).
+    local pos = ply:GetPos()
+    local found
+    if ZM_HUDZoneID and ZoneMusic.Zones[ZM_HUDZoneID] then
+        local z = ZoneMusic.Zones[ZM_HUDZoneID]
+        if pos:WithinAABox(z.min - Vector(24, 24, 24), z.max + Vector(24, 24, 24)) and ply:Alive() then
+            found = ZM_HUDZoneID
         end
     end
-end
+    if not found and ply:Alive() then
+        for id, zone in pairs(ZoneMusic.Zones or {}) do
+            if ZoneMusic.IsInZone(pos, zone) then found = id break end
+        end
+    end
+    if found ~= ZM_HUDZoneID then
+        ZM_HUDZoneID = found
+        ZM_NextPush = 0
+    end
+
+    local visible = ZM_HUDZoneID ~= nil
+
+    -- Sortie de zone : on coupe la souris et on referme le lecteur.
+    if not visible and (ZM_CursorEnabled or ZM_Expanded) then
+        ZM_CursorEnabled = false
+        ZM_Expanded = false
+        ZM_SetInput(false)
+    end
+
+    -- F3 (front montant), ignore si chat / console / menu ouvert.
+    local f3 = input.IsKeyDown(KEY_F3)
+    if f3 and not ZM_F3WasDown and visible and not gui.IsGameUIVisible()
+        and not vgui.GetKeyboardFocus() then
+        ZM_ToggleCursor()
+    end
+    ZM_F3WasDown = f3
+
+    -- Si un autre menu a coupe le curseur, on se resynchronise.
+    if ZM_CursorEnabled and not vgui.CursorVisible() then
+        ZM_CursorEnabled = false
+        ZM_ClickerOwned = false
+        ZM_InputState = nil
+        ZM_SetInput(false)
+    end
+
+    ZM_Alpha = Lerp(math.Clamp(FrameTime() * 8, 0, 1), ZM_Alpha, visible and 255 or 0)
+    if visible and ZM_Alpha > 253 then ZM_Alpha = 255 end
+    if not visible and ZM_Alpha < 2 then ZM_Alpha = 0 end
+    ZM_Player:SetAlpha(ZM_Alpha)
+    ZM_Player:SetVisible(ZM_Alpha > 0)
+
+    local w = math.min(ZM_Expanded and FULL_W or MINI_W, ScrW() - 20)
+    local targetH = math.min(ZM_Expanded and FULL_H or MINI_H, ScrH() - 40)
+    local h = Lerp(math.Clamp(FrameTime() * 12, 0, 1), ZM_Player:GetTall(), targetH)
+    if math.abs(h - targetH) < 1 then h = targetH end
+    ZM_Player:SetSize(w, math.floor(h))
+    ZM_Player:SetPos(ScrW() - w - 16, 16)
+
+    if visible and RealTime() >= ZM_NextPush then
+        ZM_NextPush = RealTime() + 0.1
+        ZM_Push()
+    end
+end)
+
+-- Alternative a F3 : bind <touche> zonemusic_cursor
+concommand.Add("zonemusic_cursor", function() ZM_ToggleCursor() end)
 
 timer.Remove("ZoneMusic_CreatePlayer")
 timer.Create("ZoneMusic_CreatePlayer", 1, 0, function()
@@ -976,7 +1036,7 @@ end)
 
 hook.Remove("ShutDown", "ZoneMusic_PlayerCleanup")
 hook.Add("ShutDown", "ZoneMusic_PlayerCleanup", function()
-    gui.EnableScreenClicker(false)
+    if ZM_ClickerOwned then gui.EnableScreenClicker(false) end
     if IsValid(ZM_Player) then ZM_Player:Remove() end
 end)
 
