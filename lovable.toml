@@ -1,2 +1,5 @@
 [run]
 dev = "sh -c 'exec python3 -m http.server 8080 --bind 0.0.0.0 --directory zonemusic' sh"
+
+"build:dev" = "lua zonemusic/tests/check_syntax.lua"
+"typecheck" = "lua zonemusic/tests/check_syntax.lua"

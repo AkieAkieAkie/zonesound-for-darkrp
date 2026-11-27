@@ -318,6 +318,8 @@ timer.Create("ZoneMusic_Check", CHECK_INTERVAL, 0, function()
     local zone = ZoneMusic.Zones[id]
     local indoor, outdoor = calculateVolumes(distance)
     local userVolume = math.Clamp(VOLUME_CVAR:GetFloat(), 0, cfg.MaxVolume or 20)
+    local state = ZoneMusic.QueueState and ZoneMusic.QueueState[id]
+    userVolume = userVolume * math.Clamp((state and tonumber(state.globalVolume) or 100) / 100, 0, 20)
 
     if active.single then
         -- Une seule URL : 2D a l'interieur, 3D a l'exterieur.
@@ -615,7 +617,7 @@ local ZM_MutedVolume
 local ZM_FFT = {}
 
 local MINI_W, MINI_H = 440, 96
-local FULL_W, FULL_H = 440, 640
+local FULL_W, FULL_H = 440, 760
 
 local function ZM_VoteCount(action)
     local state = ZM_HUDZoneID and ZoneMusic.QueueState and ZoneMusic.QueueState[ZM_HUDZoneID]
@@ -625,12 +627,17 @@ local function ZM_VoteCount(action)
     return n
 end
 
-local function ZM_Send(action)
+local function ZM_Send(action, value)
     local id = ZM_HUDZoneID or active.id
     if not id then return end
     net.Start("ZoneMusic_Action")
     net.WriteString(action)
     net.WriteString(tostring(id))
+    if action == "admin_volume" then
+        net.WriteUInt(math.Clamp(math.floor(tonumber(value) or 100), 0, 2000), 11)
+    elseif action == "admin_remove" then
+        net.WriteString(string.sub(tostring(value or ""), 1, 80))
+    end
     net.SendToServer()
 end
 
@@ -678,6 +685,7 @@ local function ZM_State()
     local queue = {}
     for i, item in ipairs(qs.queue or {}) do
         queue[i] = {
+            id = tostring(item.id or ""),
             title = tostring(item.title or "Musique"),
             requester = tostring(item.requester or "Inconnu"),
             thumbnail = tostring(item.thumbnail or ""),
@@ -693,7 +701,8 @@ local function ZM_State()
         zone = zone and zone.name or "",
         expanded = ZM_Expanded,
         cursor = ZM_CursorEnabled,
-        superadmin = IsValid(ply) and ply:IsSuperAdmin() or false,
+        admin = cfg.IsAdmin(ply),
+        globalVolume = tonumber(qs.globalVolume) or 100,
         track = track and {
             title = tostring(track.title or "Musique"),
             requester = tostring(track.requester or "Inconnu"),
@@ -719,15 +728,18 @@ local ZM_PAGE = [==[
 html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe UI',Arial,sans-serif;color:#fff}
 :root{--g:#1ed760;--g2:#1db954;--bg:#121212;--card:#181818;--mut:#b3b3b3;--line:rgba(255,255,255,.1)}
 #p{position:absolute;inset:0;margin:6px;border-radius:18px;overflow:hidden;background:var(--bg);
- box-shadow:0 18px 40px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.06)}
+ box-shadow:none}
 #bgart{position:absolute;inset:-40px;background-size:cover;background-position:center;filter:blur(40px) saturate(1.6);opacity:.55;transition:background-image .6s}
 #shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(18,18,18,.25) 0%,rgba(18,18,18,.85) 55%,#121212 100%)}
 #c{position:relative;height:100%;display:flex;flex-direction:column}
 /* mini */
-#mini{display:flex;align-items:center;gap:12px;padding:12px 14px;height:84px;flex:none}
+#mini{display:flex;align-items:center;gap:12px;padding:12px 14px;height:84px;flex:none;cursor:pointer}
+#mini .meta{overflow:hidden}
+#zn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mini:hover{background:rgba(255,255,255,.035)}
 .art{background:#282828 center/cover no-repeat;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.5);flex:none;display:flex;align-items:center;justify-content:center;color:#535353;font-size:26px}
 #mart{width:60px;height:60px}
-.meta{flex:1;min-width:0}
+.meta{flex:1 1 0;min-width:0}
 .tag{font-size:10px;font-weight:800;letter-spacing:1.6px;color:var(--g);text-transform:uppercase;display:flex;align-items:center;gap:6px}
 .tag .dot{width:6px;height:6px;border-radius:50%;background:var(--g);box-shadow:0 0 8px var(--g);animation:pl 1.4s infinite}
 @keyframes pl{50%{opacity:.3}}
@@ -781,14 +793,23 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
 .empty{color:var(--mut);font-size:12px;text-align:center;padding:16px}
 .hint{font-size:10px;color:#6a6a6a;text-align:center;margin-top:8px}
 .hint b{color:var(--mut)}
+#admin{display:none;border-top:1px solid var(--line);margin-top:12px;padding-top:10px;flex:none}
+.adminlabel{font-size:10px;color:var(--g);font-weight:800}
+#adminctl{display:flex;gap:14px;justify-content:center;margin:8px 0}
+#global{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--mut)}
+#gv{flex:1;min-width:0;accent-color:var(--g)}#gval{width:46px;text-align:right}
+.ib:disabled{opacity:.3;cursor:default;transform:none}.danger:hover{color:#ff7474}
+@media(max-height:690px){#bigart{width:150px;height:150px;margin:4px auto 8px}#full{padding:4px 16px 10px}#qh{margin-top:10px}#vol{margin-top:8px}}
+@media(max-width:380px){#eq{display:none}#mini{gap:8px;padding:12px 10px}#mart{width:48px;height:48px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
 <div id="p"><div id="bgart"></div><div id="shade"></div><div id="c">
- <div id="mini">
+ <div id="mini" role="button" tabindex="0" aria-label="Ouvrir ou refermer le lecteur" onclick="zm.toggle()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();zm.toggle()}">
   <div id="mart" class="art">&#9835;</div>
   <div class="meta"><div class="tag"><span class="dot"></span><span id="zn">Zone Music</span></div>
    <div class="t" id="mt">Aucune musique</div><div class="s" id="ms">Tape /music &lt;titre ou lien&gt;</div></div>
   <div id="eq"></div>
-  <button class="ib" id="tog" onclick="zm.toggle()"><svg viewBox="0 0 24 24" id="togi"><path d="M7 10l5 5 5-5z"/></svg></button>
+  <button class="ib" id="tog" title="Ouvrir / refermer" onclick="event.stopPropagation();zm.toggle()"><svg viewBox="0 0 24 24" id="togi"><path d="M7 10l5 5 5-5z"/></svg></button>
  </div>
  <div id="mbar"><div id="mfill"></div></div>
  <div id="full">
@@ -806,6 +827,16 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
    <input type="range" id="vr" min="0" max="2000" step="5" oninput="volIn(this.value)">
    <span id="vv">100%</span>
   </div>
+  <div id="admin">
+   <div class="adminlabel">Administration</div>
+   <div id="adminctl">
+    <button class="ib" id="aprev" onclick="zm.admin('admin_previous')" title="Précédent immédiat"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+    <button class="ib" id="apause" onclick="zm.admin(S.track&&S.track.paused?'admin_resume':'admin_pause')" title="Pause / reprise"><svg viewBox="0 0 24 24" id="api"></svg></button>
+    <button class="ib" id="anext" onclick="zm.admin('admin_skip')" title="Suivant immédiat"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+    <button class="ib danger" id="astop" onclick="if(confirm('Arrêter la musique et vider la file ainsi que l’historique ?'))zm.admin('admin_stop')" title="Arrêter et vider la file"><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg></button>
+   </div>
+   <label id="global"><span>Volume de la zone</span><input type="range" id="gv" min="0" max="2000" step="5" oninput="globalDrag=Date.now();$('gval').textContent=this.value+'%'" onchange="zm.admin('admin_volume',Number(this.value))"><span id="gval">100%</span></label>
+  </div>
   <div id="qh"><b>File d'attente</b><span id="qc">0 titre</span></div>
   <div id="q"></div>
   <div class="hint"><b>F3</b> pour activer / couper la souris &middot; votes : precedent / passer</div>
@@ -817,6 +848,7 @@ var IC={play:'<path d="M8 5v14l11-7z"/>',pause:'<path d="M6 19h4V5H6v14zm8-14v14
  von:'<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8v8a4.5 4.5 0 002.5-4zM14 3.2v2.1a7 7 0 010 13.4v2.1a9 9 0 000-17.6z"/>',
  voff:'<path d="M16.5 12A4.5 4.5 0 0014 8v2.2l2.45 2.45c.03-.2.05-.42.05-.65zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12a9 9 0 00-7-8.77v2.06A7 7 0 0119 12zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a9 9 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>',
  down:'<path d="M7 10l5 5 5-5z"/>',up:'<path d="M7 14l5-5 5 5z"/>'};
+var globalDrag=0;
 var eq=document.getElementById('eq');for(var i=0;i<12;i++)eq.appendChild(document.createElement('i'));
 function $(i){return document.getElementById(i)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -838,17 +870,22 @@ function U(s){S=s;var t=s.track;
  $('fill').style.width=pct+'%';$('knob').style.left=pct+'%';$('mfill').style.width=pct+'%';
  $('tc').textContent=fmt(t?t.current:0);$('td').textContent=t&&t.duration>0?fmt(t.duration):'--:--';
  $('pi').innerHTML=t&&t.paused?IC.play:IC.pause;
- $('play').className='cb'+(s.superadmin&&t?'':' dis');$('play').title=s.superadmin?'Pause / lecture':'R\u00e9serv\u00e9 aux SuperAdmins';
+ $('play').className='cb'+(s.admin&&t?'':' dis');$('play').title=s.admin?'Pause / lecture':'R\u00e9serv\u00e9 aux administrateurs';
  var vp=$('vp'),vs=$('vs');vp.textContent=s.votes.previous;vp.style.display=s.votes.previous>0?'block':'none';
  vs.textContent=s.votes.skip;vs.style.display=s.votes.skip>0?'block':'none';
+ $('admin').style.display=s.admin?'block':'none';
+ $('api').innerHTML=t&&t.paused?IC.play:IC.pause;
+ $('aprev').disabled=!s.history.length;$('anext').disabled=!t&&!s.queue.length;
+ $('apause').disabled=!t;$('astop').disabled=!t&&!s.queue.length;
+ if(Date.now()-globalDrag>800){$('gv').value=s.globalVolume;$('gval').textContent=s.globalVolume+'%'}
  $('vr').max=s.maxVolume;if(Date.now()-dragging>800)paintVol(s.volume);
  var bars=eq.children,sp=s.spectrum||[];for(var i=0;i<bars.length;i++){var v=(sp[i*2]||0)+(sp[i*2+1]||0);bars[i].style.height=(3+Math.min(1,v)*25)+'px'}
  eq.style.opacity=t&&!t.paused?1:.3;
- var qk=JSON.stringify(s.queue);if(qk!==lastQ){lastQ=qk;var h='';
+ var qk=JSON.stringify([s.queue,s.admin]);if(qk!==lastQ){lastQ=qk;var h='';
   $('qc').textContent=s.queue.length+(s.queue.length>1?' titres':' titre');
   if(!s.queue.length)h='<div class="empty">Rien \u00e0 suivre. Ajoute un son avec /music</div>';
   s.queue.forEach(function(q,i){var a=/^https?:/.test(q.thumbnail)?' style="background-image:url(&quot;'+esc(q.thumbnail)+'&quot;)">':'>&#9835;';
-   h+='<div class="row"><span class="n">'+(i+1)+'</span><div class="art"'+a+'</div><div class="meta"><div class="t">'+esc(q.title)+'</div><div class="s">'+esc(q.requester)+'</div></div><span class="d">'+(q.duration>0?fmt(q.duration):'')+'</span></div>'});
+   h+='<div class="row"><span class="n">'+(i+1)+'</span><div class="art"'+a+'</div><div class="meta"><div class="t">'+esc(q.title)+'</div><div class="s">'+esc(q.requester)+'</div></div><span class="d">'+(q.duration>0?fmt(q.duration):'')+'</span>'+(s.admin?'<button class="ib danger" data-id="'+esc(q.id)+'" onclick="zm.admin(\'admin_remove\',this.getAttribute(\'data-id\'))" title="Supprimer ce titre"><svg viewBox="0 0 24 24"><path d="M6 7h12l-1 14H7L6 7zm2-4h8v2H8zM4 5h16v2H4z"/></svg></button>':'')+'</div>'});
   $('q').innerHTML=h}
 }
 </script></body></html>
@@ -908,12 +945,15 @@ local function ZM_CreatePlayer()
     ZM_Player:SetSize(MINI_W, MINI_H)
     ZM_Player:SetPos(ScrW() - MINI_W - 16, 16)
     ZM_Player:SetPaintBackground(false)
+    ZM_Player.Paint = function() end
     ZM_Player:SetAlpha(0)
     ZM_Player:SetVisible(false)
 
     ZM_HTML = vgui.Create("DHTML", ZM_Player)
     ZM_HTML:Dock(FILL)
     ZM_HTML:SetAllowLua(false)
+    ZM_HTML:SetPaintBackground(false)
+    ZM_HTML.Paint = function() end
 
     ZM_HTML:AddFunction("zm", "toggle", function()
         ZM_Expanded = not ZM_Expanded
@@ -924,6 +964,11 @@ local function ZM_CreatePlayer()
         if action == "skip" or action == "previous" or action == "pause" or action == "resume" then
             ZM_Send(action)
         end
+    end)
+    ZM_HTML:AddFunction("zm", "admin", function(action, value)
+        if not cfg.IsAdmin(LocalPlayer()) then return end
+        local allowed = {admin_skip=true, admin_previous=true, admin_pause=true, admin_resume=true, admin_stop=true, admin_volume=true, admin_remove=true}
+        if allowed[tostring(action)] then ZM_Send(tostring(action), value) end
     end)
     ZM_HTML:AddFunction("zm", "volume", function(value)
         value = math.Clamp((tonumber(value) or 100) / 100, 0, cfg.MaxVolume or 20)

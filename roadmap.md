@@ -1,0 +1,3 @@
+- [ ] Rendre le petit lecteur entièrement cliquable et enlever le cadre gris.
+- [ ] Ajouter les commandes admin immédiates et le volume commun de la zone.
+- [ ] Vérifier les permissions, la file et l’interface, puis livrer l’archive.

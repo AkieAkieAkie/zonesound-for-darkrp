@@ -14,6 +14,8 @@ ZoneMusic.Playing = ZoneMusic.Playing or {}
 ZoneMusic.Queues = ZoneMusic.Queues or {}
 ZoneMusic.History = ZoneMusic.History or {}
 ZoneMusic.Votes = ZoneMusic.Votes or {}
+ZoneMusic.ZoneVolumes = ZoneMusic.ZoneVolumes or {}
+local trackSerial = 0
 local MAX_QUEUE, MAX_HISTORY = 20, 10
 
 local function notify(ply, msg)
@@ -56,12 +58,13 @@ local function sendQueue(id, target)
             paused = current.paused == true
         } or nil,
         queue = {}, history = {}, votes = ZoneMusic.Votes[id] or {skip = {}, previous = {}},
-        paused = current and current.paused == true or false
+        paused = current and current.paused == true or false,
+        globalVolume = ZoneMusic.ZoneVolumes[id] or 100
     }
     for i, t in ipairs(ZoneMusic.Queues[id] or {}) do
         if i > MAX_QUEUE then break end
         payload.queue[#payload.queue + 1] = {
-            title = t.title, thumbnail = t.thumbnail or "",
+            id = t.queueID, title = t.title, thumbnail = t.thumbnail or "",
             requester = t.requester or "Inconnu", duration = t.duration or 0
         }
     end
@@ -156,6 +159,8 @@ end
 
 local function addTrack(ply, id, data)
     if not ZoneMusic.Zones[id] then return end
+    trackSerial = trackSerial + 1
+    data.queueID = tostring(SysTime()) .. ":" .. tostring(trackSerial)
     data.requester = IsValid(ply) and ply:Nick() or "Console"
     data.owner = IsValid(ply) and ply:SteamID64() or "console"
     data.title = string.sub(tostring(data.title or "Musique"), 1, 160)
@@ -338,8 +343,8 @@ Commands["/musicvolume"] = function(ply,args)
 end
 
 local function setPaused(ply, paused)
-    if not IsValid(ply) or not ply:IsSuperAdmin() then
-        return notify(ply,"Cette commande est réservée aux SuperAdmins.")
+    if not IsValid(ply) or not cfg.IsAdmin(ply) then
+        return notify(ply,"Cette commande est réservée aux administrateurs.")
     end
     local id=zoneAt(ply:GetPos())
     if not id or not ZoneMusic.Playing[id] then return notify(ply,"Aucune musique dans ta zone.") end
@@ -417,6 +422,42 @@ net.Receive("ZoneMusic_Action",function(_,ply)
     local action=net.ReadString()
     local id=net.ReadString()
     if not isstring(id) or #id>64 then return end
+    if not IsValid(ply) then return end
+    if (ply.ZM_ActionNext or 0) > CurTime() then return end
+    ply.ZM_ActionNext = CurTime() + 0.15
+    if string.sub(action, 1, 6) == "admin_" then
+        if not cfg.IsAdmin(ply) then return notify(ply,"Réservé aux administrateurs.") end
+        if not ply:Alive() or zoneAt(ply:GetPos()) ~= id then
+            return notify(ply,"Tu dois être dans la zone concernée.")
+        end
+        if action == "admin_skip" then
+            startNext(id,false)
+        elseif action == "admin_previous" then
+            if not startNext(id,true) then notify(ply,"Aucun morceau précédent.") end
+        elseif action == "admin_pause" then
+            setPaused(ply,true)
+        elseif action == "admin_resume" then
+            setPaused(ply,false)
+        elseif action == "admin_stop" then
+            stopZone(id)
+        elseif action == "admin_volume" then
+            local value = net.ReadUInt(11)
+            ZoneMusic.ZoneVolumes[id] = math.Clamp(value,0,2000)
+            sendQueue(id)
+        elseif action == "admin_remove" then
+            local queueID = net.ReadString()
+            if #queueID > 80 then return end
+            for i,track in ipairs(ZoneMusic.Queues[id] or {}) do
+                if track.queueID == queueID then
+                    table.remove(ZoneMusic.Queues[id],i)
+                    sendQueue(id)
+                    return
+                end
+            end
+            notify(ply,"Ce titre n'est plus dans la file d'attente.")
+        end
+        return
+    end
     if action=="skip" or action=="previous" then
         voteAction(ply,id,action)
     elseif action=="pause" then
