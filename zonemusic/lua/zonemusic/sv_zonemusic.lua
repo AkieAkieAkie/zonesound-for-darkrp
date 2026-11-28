@@ -1,4 +1,4 @@
--- ZoneMusic SERVER - queue, votes, historique et pause SuperAdmin
+-- ZoneMusic SERVER - queue, votes, historique et administration
 util.AddNetworkString("ZoneMusic_Zones")
 util.AddNetworkString("ZoneMusic_Play")
 util.AddNetworkString("ZoneMusic_Stop")
@@ -106,14 +106,15 @@ local function resetVotes(id)
 end
 
 local function stopZone(id)
-    if not ZoneMusic.Playing[id] then return false end
+    local hadTracks = ZoneMusic.Playing[id] ~= nil
+        or #(ZoneMusic.Queues[id] or {}) > 0 or #(ZoneMusic.History[id] or {}) > 0
     ZoneMusic.Playing[id] = nil
     ZoneMusic.Queues[id] = {}
     ZoneMusic.History[id] = {}
     resetVotes(id)
     sendStop(id)
     sendQueue(id)
-    return true
+    return hadTracks
 end
 
 local function pushHistory(id, track)
@@ -125,6 +126,7 @@ end
 
 local function startNext(id, previous)
     local queue = ZoneMusic.Queues[id] or {}
+    ZoneMusic.Queues[id] = queue
     local old = ZoneMusic.Playing[id]
     local nextTrack
 
@@ -143,6 +145,7 @@ local function startNext(id, previous)
             ZoneMusic.Playing[id] = nil
             sendStop(id)
         end
+        resetVotes(id)
         sendQueue(id)
         return false
     end
@@ -347,6 +350,7 @@ local function setPaused(ply, paused)
         return notify(ply,"Cette commande est réservée aux administrateurs.")
     end
     local id=zoneAt(ply:GetPos())
+    if not ply:Alive() then return notify(ply,"Tu dois être vivant dans la zone concernée.") end
     if not id or not ZoneMusic.Playing[id] then return notify(ply,"Aucune musique dans ta zone.") end
     local t=ZoneMusic.Playing[id]
     if t.paused == paused then return notify(ply, paused and "Déjà en pause." or "La musique joue déjà.") end
@@ -461,8 +465,10 @@ net.Receive("ZoneMusic_Action",function(_,ply)
     if action=="skip" or action=="previous" then
         voteAction(ply,id,action)
     elseif action=="pause" then
+        if zoneAt(ply:GetPos()) ~= id then return end
         setPaused(ply,true)
     elseif action=="resume" then
+        if zoneAt(ply:GetPos()) ~= id then return end
         setPaused(ply,false)
     end
 end)
@@ -486,8 +492,8 @@ hook.Add("PlayerInitialSpawn","ZoneMusic_Sync",function(ply)
     timer.Simple(4,function()
         if not IsValid(ply) then return end
         ZoneMusic.SendZones(ply)
-        for id in pairs(ZoneMusic.Playing) do
-            sendPlay(id,ply)
+        for id in pairs(ZoneMusic.Zones) do
+            if ZoneMusic.Playing[id] then sendPlay(id,ply) end
             sendQueue(id,ply)
         end
     end)
@@ -510,4 +516,4 @@ timer.Simple(0,function()
     ZoneMusic.SendZones()
 end)
 
-print("[ZoneMusic] Serveur chargé : queue, votes, historique et pause SuperAdmin.")
+print("[ZoneMusic] Serveur chargé : queue, votes, historique et administration.")

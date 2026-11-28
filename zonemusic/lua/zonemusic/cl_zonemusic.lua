@@ -701,7 +701,8 @@ local function ZM_State()
         zone = zone and zone.name or "",
         expanded = ZM_Expanded,
         cursor = ZM_CursorEnabled,
-        admin = cfg.IsAdmin(ply),
+        admin = IsValid(ply) and ply:Alive() and zone ~= nil
+            and ZoneMusic.IsInZone(ply:GetPos(), zone) and cfg.IsAdmin(ply),
         globalVolume = tonumber(qs.globalVolume) or 100,
         track = track and {
             title = tostring(track.title or "Musique"),
@@ -729,7 +730,7 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
 :root{--g:#1ed760;--g2:#1db954;--bg:#121212;--card:#181818;--mut:#b3b3b3;--line:rgba(255,255,255,.1)}
 #p{position:absolute;inset:0;margin:6px;border-radius:18px;overflow:hidden;background:var(--bg);
  box-shadow:none}
-#bgart{position:absolute;inset:-40px;background-size:cover;background-position:center;filter:blur(40px) saturate(1.6);opacity:.55;transition:background-image .6s}
+#bgart{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(40px) saturate(1.6);opacity:.55;transition:background-image .6s}
 #shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(18,18,18,.25) 0%,rgba(18,18,18,.85) 55%,#121212 100%)}
 #c{position:relative;height:100%;display:flex;flex-direction:column}
 /* mini */
@@ -753,12 +754,14 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
 #mbar{position:absolute;left:0;right:0;top:82px;height:2px;background:rgba(255,255,255,.08)}
 #mbar div{height:100%;background:var(--g);width:0}
 /* full */
-#full{flex:1;display:none;flex-direction:column;padding:6px 22px 16px;min-height:0}
+#full{flex:1;display:none;flex-direction:column;padding:6px 22px 16px;min-height:0;overflow-y:auto}
+#full>*{flex-shrink:0}
+#full::-webkit-scrollbar{width:5px}#full::-webkit-scrollbar-thumb{background:var(--mut);border-radius:4px}
 .expanded #full{display:flex}
 .expanded #mbar{display:none}
-#bigart{width:220px;height:220px;margin:6px auto 16px;border-radius:10px;font-size:64px;box-shadow:0 20px 50px rgba(0,0,0,.65)}
+#bigart{width:180px;height:180px;margin:6px auto 8px;border-radius:10px;font-size:64px;box-shadow:0 20px 50px rgba(0,0,0,.65)}
 #ft{font-size:21px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#fs{font-size:13px;color:var(--mut);margin-top:4px}
+#fs{font-size:13px;color:var(--mut);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #prog{margin-top:14px}
 #track{position:relative;height:4px;border-radius:4px;background:rgba(255,255,255,.2)}
 #fill{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:#fff;width:0}
@@ -782,7 +785,7 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
 #qh{display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
 #qh b{font-size:14px;font-weight:800}
 #qh span{font-size:11px;color:var(--mut);font-weight:600}
-#q{flex:1;overflow-y:auto;margin-top:8px;min-height:0}
+#q{flex:1 0 96px;overflow-y:auto;margin-top:8px;min-height:96px}
 #q::-webkit-scrollbar{width:5px}#q::-webkit-scrollbar-thumb{background:#535353;border-radius:4px}
 .row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:6px}
 .row:hover{background:rgba(255,255,255,.08)}
@@ -799,7 +802,8 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
 #global{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--mut)}
 #gv{flex:1;min-width:0;accent-color:var(--g)}#gval{width:46px;text-align:right}
 .ib:disabled{opacity:.3;cursor:default;transform:none}.danger:hover{color:#ff7474}
-@media(max-height:690px){#bigart{width:150px;height:150px;margin:4px auto 8px}#full{padding:4px 16px 10px}#qh{margin-top:10px}#vol{margin-top:8px}}
+@media(max-height:690px){#bigart{width:112px;height:112px;margin:4px auto 8px}#full{padding:4px 16px 10px}#qh{margin-top:10px}#vol{margin-top:8px}}
+@media(max-height:590px){#bigart{width:80px;height:80px;margin:0 auto 6px}#ctl{gap:20px}#play{width:44px;height:44px}#prog{margin-top:8px}#admin{margin-top:8px;padding-top:6px}}
 @media(max-width:380px){#eq{display:none}#mini{gap:8px;padding:12px 10px}#mart{width:48px;height:48px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body>
@@ -833,7 +837,7 @@ html,body{background:transparent;overflow:hidden;font-family:Montserrat,'Segoe U
     <button class="ib" id="aprev" onclick="zm.admin('admin_previous')" title="Précédent immédiat"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
     <button class="ib" id="apause" onclick="zm.admin(S.track&&S.track.paused?'admin_resume':'admin_pause')" title="Pause / reprise"><svg viewBox="0 0 24 24" id="api"></svg></button>
     <button class="ib" id="anext" onclick="zm.admin('admin_skip')" title="Suivant immédiat"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
-    <button class="ib danger" id="astop" onclick="if(confirm('Arrêter la musique et vider la file ainsi que l’historique ?'))zm.admin('admin_stop')" title="Arrêter et vider la file"><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg></button>
+    <button class="ib danger" id="astop" onclick="zm.admin('admin_stop')" title="Arrêter et vider la file"><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg></button>
    </div>
    <label id="global"><span>Volume de la zone</span><input type="range" id="gv" min="0" max="2000" step="5" oninput="globalDrag=Date.now();$('gval').textContent=this.value+'%'" onchange="zm.admin('admin_volume',Number(this.value))"><span id="gval">100%</span></label>
   </div>
@@ -876,7 +880,7 @@ function U(s){S=s;var t=s.track;
  $('admin').style.display=s.admin?'block':'none';
  $('api').innerHTML=t&&t.paused?IC.play:IC.pause;
  $('aprev').disabled=!s.history.length;$('anext').disabled=!t&&!s.queue.length;
- $('apause').disabled=!t;$('astop').disabled=!t&&!s.queue.length;
+ $('apause').disabled=!t;$('astop').disabled=!t&&!s.queue.length&&!s.history.length;
  if(Date.now()-globalDrag>800){$('gv').value=s.globalVolume;$('gval').textContent=s.globalVolume+'%'}
  $('vr').max=s.maxVolume;if(Date.now()-dragging>800)paintVol(s.volume);
  var bars=eq.children,sp=s.spectrum||[];for(var i=0;i<bars.length;i++){var v=(sp[i*2]||0)+(sp[i*2+1]||0);bars[i].style.height=(3+Math.min(1,v)*25)+'px'}
@@ -953,9 +957,9 @@ local function ZM_CreatePlayer()
     ZM_HTML:Dock(FILL)
     ZM_HTML:SetAllowLua(false)
     ZM_HTML:SetPaintBackground(false)
-    ZM_HTML.Paint = function() end
 
     ZM_HTML:AddFunction("zm", "toggle", function()
+        if not ZM_HUDZoneID or not ZM_CursorEnabled then return end
         ZM_Expanded = not ZM_Expanded
         ZM_NextPush = 0
     end)
@@ -967,6 +971,15 @@ local function ZM_CreatePlayer()
     end)
     ZM_HTML:AddFunction("zm", "admin", function(action, value)
         if not cfg.IsAdmin(LocalPlayer()) then return end
+        if action == "admin_stop" then
+            local id = ZM_HUDZoneID
+            if not id then return end
+            Derma_Query("Arrêter la musique et vider la file ainsi que l’historique ?",
+                "Zone Music", "Arrêter", function()
+                    if ZM_HUDZoneID == id then ZM_Send("admin_stop") end
+                end, "Annuler")
+            return
+        end
         local allowed = {admin_skip=true, admin_previous=true, admin_pause=true, admin_resume=true, admin_stop=true, admin_volume=true, admin_remove=true}
         if allowed[tostring(action)] then ZM_Send(tostring(action), value) end
     end)

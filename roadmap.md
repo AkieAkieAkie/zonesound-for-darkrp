@@ -1,3 +1,4 @@
-- [ ] Rendre le petit lecteur entièrement cliquable et enlever le cadre gris.
-- [ ] Ajouter les commandes admin immédiates et le volume commun de la zone.
-- [ ] Vérifier les permissions, la file et l’interface, puis livrer l’archive.
+- [x] Rendre le petit lecteur entièrement cliquable et enlever le cadre gris.
+- [x] Ajouter les commandes admin immédiates et le volume commun de la zone.
+- [x] Vérifier les permissions, la file et l’interface, puis livrer l’archive.
+- [ ] Essai réel en jeu (bloqué : aucun serveur Garry’s Mod accessible ici).
